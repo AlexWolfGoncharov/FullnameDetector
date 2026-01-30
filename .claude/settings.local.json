@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(python run.py:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill -9)",
+      "Bash(curl:*)",
+      "Bash(__NEW_LINE_6e8d34a0e7b11966__ echo -e \"\\\\nTest 2: Full name\")",
+      "Bash(__NEW_LINE_be9a749ec5c9ba2c__ echo -e \"\\\\nTest 3: Name + Surname\")",
+      "Bash(curl -s -X POST http://localhost:8001/detect-name -H \"Content-Type: application/json\" -d '{\"\"comment\"\": \"\"На картку Коваленко Марії\"\"}')",
+      "Bash(__NEW_LINE_4eb5ad9bbcf51ac2__ echo -e \"\\\\nTest 4: Real payment comment\")"
+    ]
+  }
+}

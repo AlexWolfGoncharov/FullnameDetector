@@ -1,0 +1,64 @@
+{
+  "no_name_comments": [
+    {"comment": "Зарплата за грудень", "expected_has_name": false},
+    {"comment": "Заробітна плата за 2 ч 11.2025 р.", "expected_has_name": false},
+    {"comment": "Аванс за листопад", "expected_has_name": false},
+    {"comment": "Премія за 4 квартал", "expected_has_name": false},
+    {"comment": "Поповнення рахунку", "expected_has_name": false},
+    {"comment": "Переказ коштів", "expected_has_name": false},
+    {"comment": "Оплата послуг", "expected_has_name": false},
+    {"comment": "Податки за листопад", "expected_has_name": false},
+    {"comment": "ЄСВ за 11.2025", "expected_has_name": false},
+    {"comment": "Комунальні послуги", "expected_has_name": false},
+    {"comment": "1000 грн", "expected_has_name": false},
+    {"comment": "500.50", "expected_has_name": false},
+    {"comment": "Рахунок №12345", "expected_has_name": false},
+    {"comment": "Договір №001/2025", "expected_has_name": false},
+    {"comment": "За січень 2025", "expected_has_name": false}
+  ],
+  "with_name_comments": [
+    {
+      "comment": "Переказ Іванову Петру Олександровичу",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя + Отчество",
+      "expected_name": "Іванов Петро Олександрович"
+    },
+    {
+      "comment": "Для Шевченко Тараса Григоровича",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя + Отчество"
+    },
+    {
+      "comment": "Переказ Коваленко Марії",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя"
+    },
+    {
+      "comment": "На картку Бондаренко Андрію",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя"
+    },
+    {
+      "comment": "Від Петренко",
+      "expected_has_name": true,
+      "expected_category": "Только фамилия"
+    },
+    {
+      "comment": "Подопригора Андрій Петрович - зарплата",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя + Отчество"
+    },
+    {
+      "comment": "Зарплата Мельник О.В.",
+      "expected_has_name": true,
+      "expected_category": "Фамилия + Имя"
+    }
+  ],
+  "edge_cases": [
+    {"comment": "", "expected_has_name": false},
+    {"comment": "   ", "expected_has_name": false},
+    {"comment": "12", "expected_has_name": false},
+    {"comment": "ЗП", "expected_has_name": false},
+    {"comment": "Переказ від Іванова І.І. за договором №123", "expected_has_name": true}
+  ]
+}

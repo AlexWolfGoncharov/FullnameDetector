@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: name-detector-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount models directory for LLM (download separately)
+      - ./models:/app/models
+    environment:
+      - NAME_DETECTOR_HOST=0.0.0.0
+      - NAME_DETECTOR_PORT=8000
+      - NAME_DETECTOR_DEBUG=false
+      - NAME_DETECTOR_SPACY_MODEL=uk_core_news_md
+      - NAME_DETECTOR_LLM_ENABLED=true
+      - NAME_DETECTOR_CACHE_ENABLED=true
+      - NAME_DETECTOR_CACHE_MAXSIZE=10000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Ollama for LLM (alternative to llama-cpp)
+  # ollama:
+  #   image: ollama/ollama
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   restart: unless-stopped
+
+volumes:
+  ollama_data:
