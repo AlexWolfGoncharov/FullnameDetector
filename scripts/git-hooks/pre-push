@@ -1,0 +1,12 @@
+#!/bin/sh
+# Перевірка: не пушити HF токени перед push
+# Встановити: ./scripts/install-git-hooks.sh
+
+# Шукаємо hf_ + 20+ символів (типово HF токени)
+if git grep -E 'hf_[a-zA-Z0-9]{20,}' 2>/dev/null; then
+  echo ""
+  echo "ERROR: Знайдено схожий на HF токен. Видаліть перед push."
+  echo "  Токен має бути тільки в .env (в .gitignore)"
+  exit 1
+fi
+exit 0

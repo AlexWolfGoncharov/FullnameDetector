@@ -1,16 +1,15 @@
-version: '3.8'
-
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Для закритих моделей на HF: передати HF_TOKEN з .env
+        - HF_TOKEN=${HF_TOKEN:-}
     container_name: name-detector-api
     ports:
       - "8000:8000"
-    volumes:
-      # Mount models directory for LLM (download separately)
-      - ./models:/app/models
+    # Модель LLM вже в образі, volume не потрібен
     environment:
       - NAME_DETECTOR_HOST=0.0.0.0
       - NAME_DETECTOR_PORT=8000
@@ -25,7 +24,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 180s
 
   # Optional: Ollama for LLM (alternative to llama-cpp)
   # ollama:

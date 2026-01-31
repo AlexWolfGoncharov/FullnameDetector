@@ -118,6 +118,14 @@ class SanctionsChecker:
         except Exception as e:
             logger.error(f"Failed to load sanctions file: {e}")
 
+    def reload(self) -> bool:
+        """Перезавантажити список з файлу (після оновлення CSV)"""
+        self._names.clear()
+        self._name_parts.clear()
+        self._loaded = False
+        self._load_sanctions()
+        return self._loaded
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded

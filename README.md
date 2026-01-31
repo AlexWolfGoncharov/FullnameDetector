@@ -25,9 +25,16 @@ source venv/bin/activate   # Linux/macOS
 # Встановлення залежностей
 pip install -r requirements.txt
 
-# Запуск (автозавантаження моделей при першому запуску)
+# Завантаження моделей (spaCy, RoBERTa, MamayLM ~3GB) — один раз
+HF_TOKEN=hf_xxx python scripts/download_models.py
+
+# Запуск
 python run.py --port 8000
 ```
+
+> **Примітка:** Моделі не в репозиторії (GitHub ліміт 100MB, MamayLM ~2.5GB). Скрипт `download_models.py` завантажує їх з HuggingFace. Без `HF_TOKEN` публічні моделі теж завантажаться.
+>
+> **Безпека:** HF токен тільки в `.env` (не комітити). Перед push встановіть hook: `./scripts/install-git-hooks.sh`
 
 API буде доступне на `http://localhost:8000`. Документація: `http://localhost:8000/docs`.
 
@@ -86,6 +93,19 @@ cp .env.example .env
 
 Детальніше: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+## Оновлення санкційного списку
+
+При старті API:
+1. **Разово** — завантажує оновлений список з OpenSanctions
+2. **Щодня о 3:00** (Europe/Kyiv) — автоматичне оновлення
+
+Ручний запуск:
+```bash
+python scripts/fetch_sanctions.py
+```
+
+Джерело: [drs.nsdc.gov.ua](https://drs.nsdc.gov.ua/export/subjects) → [OpenSanctions ua_nsdc_sanctions](https://www.opensanctions.org/datasets/ua_nsdc_sanctions/)
+
 ## Тестування
 
 ```bash
@@ -98,9 +118,17 @@ python scripts/test_via_api.py http://localhost:8000
 
 ## Docker
 
+Docker-образ **включає всі моделі** (spaCy, RoBERTa NER, MamayLM ~3GB) — окреме завантаження не потрібне.
+
 ```bash
-docker-compose up -d
+# Збірка і запуск (перша збірка ~15–20 хв — завантаження моделей)
+docker compose up -d
+
+# Якщо модель закрита на HuggingFace:
+HF_TOKEN=hf_xxx docker compose build
 ```
+
+Порт: 8000. Документація: http://localhost:8000/docs
 
 ## Структура проекту
 

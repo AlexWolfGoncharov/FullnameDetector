@@ -19,6 +19,7 @@ httpx==0.26.0
 # Utils
 python-multipart==0.0.6
 cachetools==5.3.2
+apscheduler>=3.10.0
 
 # MamayLM (llama-cpp-python for CPU inference)
 # Версия 0.2.70+ поддерживает Gemma 3 архитектуру

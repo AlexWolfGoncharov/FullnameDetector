@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -41,8 +42,13 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "mamaylm:latest"  # Используйте модель MamayLM через Ollama
 
-    # HuggingFace token для закритих моделей
-    hf_token: str = "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"
+    # HuggingFace token (з .env: NAME_DETECTOR_HF_TOKEN або HF_TOKEN) — не комітити в репо!
+    hf_token: str = ""
+
+    @field_validator("hf_token", mode="before")
+    @classmethod
+    def _hf_token_from_env(cls, v: str) -> str:
+        return v or os.getenv("HF_TOKEN", "") or os.getenv("NAME_DETECTOR_HF_TOKEN", "")
 
     # LLM параметри (оптимізовані для слабких машин)
     llm_context_length: int = 2048

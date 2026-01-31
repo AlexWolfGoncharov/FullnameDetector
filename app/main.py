@@ -4,6 +4,7 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -17,6 +18,8 @@ from app.models.schemas import (
 )
 from app.services.pipeline import get_pipeline, NameDetectionPipeline
 from app.services.request_logger import get_request_logger
+from app.services.sanctions_checker import get_sanctions_checker
+from app.services.sanctions_updater import run_update as run_sanctions_update
 from app.setup import SetupManager
 
 # Configure logging
@@ -27,10 +30,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_scheduler: BackgroundScheduler | None = None
+
+
+def _update_sanctions_and_reload():
+    """Оновити санкції та перезавантажити checker"""
+    if run_sanctions_update():
+        try:
+            get_sanctions_checker().reload()
+            logger.info("Sanctions checker reloaded with new data")
+        except Exception as e:
+            logger.error(f"Failed to reload sanctions: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown"""
+    global _scheduler
+
     logger.info("=" * 60)
     logger.info("Starting Ukrainian Name Detection API")
     logger.info("=" * 60)
@@ -41,6 +58,16 @@ async def lifespan(app: FastAPI):
 
     # Check and download models if needed
     setup_manager.setup_all()
+
+    # Оновлення санкцій при старті
+    logger.info("Updating sanctions list...")
+    _update_sanctions_and_reload()
+
+    # Щоденне оновлення о 3:00 (Europe/Kyiv)
+    _scheduler = BackgroundScheduler(timezone="Europe/Kyiv")
+    _scheduler.add_job(_update_sanctions_and_reload, "cron", hour=3, minute=0)
+    _scheduler.start()
+    logger.info("Sanctions daily update scheduled at 03:00 (Europe/Kyiv)")
 
     # Initialize pipeline
     pipeline = get_pipeline()
@@ -55,6 +82,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if _scheduler:
+        _scheduler.shutdown(wait=False)
     logger.info("Shutting down...")
 
 
