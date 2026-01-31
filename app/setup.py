@@ -3,8 +3,12 @@
 import os
 import sys
 import subprocess
+import shutil
 import logging
+import time
 from pathlib import Path
+
+import httpx
 
 from app.config import get_settings, MODELS_DIR
 
@@ -39,11 +43,16 @@ class SetupManager:
         if not self._setup_spacy():
             logger.warning("spaCy setup had issues, continuing...")
 
-        # 3. Download LLM model (MamayLM via HuggingFace)
+        # 3. LLM setup (Ollama or llama.cpp)
         if self.settings.llm_enabled:
-            if not self._setup_llm():
-                logger.warning("LLM setup incomplete - will work without LLM fallback")
-                success = False
+            if self.settings.llm_backend == "ollama":
+                if not self._setup_ollama():
+                    logger.warning("Ollama setup incomplete - will work without LLM fallback")
+                    success = False
+            else:
+                if not self._setup_llm():
+                    logger.warning("LLM setup incomplete - will work without LLM fallback")
+                    success = False
 
         logger.info("=" * 60)
         if success:
@@ -187,6 +196,123 @@ class SetupManager:
                 model_path.unlink()
             return False
 
+    def _ollama_is_running(self) -> bool:
+        """Check if Ollama server is running"""
+        try:
+            r = httpx.get(
+                f"{self.settings.ollama_base_url}/api/tags",
+                timeout=2.0
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def _ollama_start(self) -> bool:
+        """Start Ollama server in background if not running"""
+        if self._ollama_is_running():
+            return True
+
+        ollama_cmd = shutil.which("ollama")
+        if not ollama_cmd:
+            logger.warning("ollama not found in PATH. Install from https://ollama.com")
+            return False
+
+        logger.info("Starting Ollama server...")
+        try:
+            # Start ollama serve in background (detached)
+            subprocess.Popen(
+                [ollama_cmd, "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            # Wait for server to be ready
+            for _ in range(15):
+                time.sleep(1)
+                if self._ollama_is_running():
+                    logger.info("Ollama server started")
+                    return True
+            logger.error("Ollama server failed to start within 15 seconds")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to start Ollama: {e}")
+            return False
+
+    def _ollama_model_exists(self) -> bool:
+        """Check if configured model exists in Ollama"""
+        try:
+            r = httpx.get(
+                f"{self.settings.ollama_base_url}/api/tags",
+                timeout=5.0
+            )
+            if r.status_code != 200:
+                return False
+            models = r.json().get("models", [])
+            model_base = self.settings.ollama_model.split(":")[0]
+            return any(
+                m.get("name", "").startswith(model_base)
+                for m in models
+            )
+        except Exception:
+            return False
+
+    def _setup_ollama(self) -> bool:
+        """Ensure Ollama is running and model is available"""
+        # 1. Start Ollama if not running
+        if not self._ollama_start():
+            return False
+
+        # 2. Check if model exists
+        if self._ollama_model_exists():
+            logger.info(f"Ollama model '{self.settings.ollama_model}' already available")
+            return True
+
+        # 3. Model not in Ollama — create from GGUF
+        model_path = self.settings.llm_model_path
+
+        if not model_path.exists():
+            logger.info("GGUF not found, downloading for Ollama...")
+            if not self._setup_llm():
+                logger.error("Failed to download GGUF for Ollama")
+                return False
+
+        # 4. Create Modelfile and ollama create
+        model_base = self.settings.ollama_model.split(":")[0]
+        modelfile_path = MODELS_DIR / "Modelfile.mamaylm"
+
+        try:
+            modelfile_content = f"""FROM {model_path.absolute()}
+PARAMETER temperature 0.1
+PARAMETER num_ctx 2048
+"""
+            modelfile_path.write_text(modelfile_content, encoding="utf-8")
+            logger.info(f"Created Modelfile at {modelfile_path}")
+
+            logger.info(f"Creating Ollama model '{model_base}' from GGUF (may take a minute)...")
+            result = subprocess.run(
+                ["ollama", "create", model_base, "-f", str(modelfile_path)],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+
+            if result.returncode != 0:
+                logger.error(f"ollama create failed: {result.stderr}")
+                return False
+
+            logger.info(f"Ollama model '{model_base}' created successfully")
+            return True
+
+        except subprocess.TimeoutExpired:
+            logger.error("ollama create timed out")
+            return False
+        except FileNotFoundError:
+            logger.error("ollama command not found. Install from https://ollama.com")
+            return False
+        except Exception as e:
+            logger.error(f"Ollama setup failed: {e}")
+            return False
+
     def verify_setup(self) -> dict:
         """Verify all components are properly set up"""
         status = {
@@ -204,30 +330,41 @@ class SetupManager:
         except Exception as e:
             logger.error(f"spaCy model check failed: {e}")
 
-        # Check LLM file exists
-        model_path = self.settings.llm_model_path
-        if model_path.exists():
-            size_gb = model_path.stat().st_size / (1024 ** 3)
-            status["llm_model"] = True
-            logger.info(f"LLM model file OK: {model_path} ({size_gb:.2f} GB)")
-
-            # Try to load LLM (quick test)
-            try:
-                from llama_cpp import Llama
-                logger.info("Testing LLM load (this may take a moment)...")
-                llm = Llama(
-                    model_path=str(model_path),
-                    n_ctx=512,  # Small context for quick test
-                    n_threads=2,
-                    verbose=False
-                )
-                del llm
-                status["llm_loadable"] = True
-                logger.info("LLM model loadable: OK")
-            except Exception as e:
-                logger.error(f"LLM load test failed: {e}")
+        # Check LLM (Ollama or llama.cpp)
+        if self.settings.llm_backend == "ollama":
+            status["llm_model"] = self._ollama_is_running()
+            status["llm_loadable"] = status["llm_model"] and self._ollama_model_exists()
+            if status["llm_model"]:
+                logger.info("Ollama: running")
+            else:
+                logger.warning("Ollama: not running")
+            if status["llm_loadable"]:
+                logger.info("Ollama model: available")
+            else:
+                logger.warning("Ollama model: not found")
         else:
-            logger.warning(f"LLM model not found: {model_path}")
+            model_path = self.settings.llm_model_path
+            if model_path.exists():
+                size_gb = model_path.stat().st_size / (1024 ** 3)
+                status["llm_model"] = True
+                logger.info(f"LLM model file OK: {model_path} ({size_gb:.2f} GB)")
+
+                try:
+                    from llama_cpp import Llama
+                    logger.info("Testing LLM load (this may take a moment)...")
+                    llm = Llama(
+                        model_path=str(model_path),
+                        n_ctx=512,
+                        n_threads=2,
+                        verbose=False
+                    )
+                    del llm
+                    status["llm_loadable"] = True
+                    logger.info("LLM model loadable: OK")
+                except Exception as e:
+                    logger.error(f"LLM load test failed: {e}")
+            else:
+                logger.warning(f"LLM model not found: {model_path}")
 
         return status
 

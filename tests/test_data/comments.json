@@ -2,6 +2,9 @@
   "no_name_comments": [
     {"comment": "Зарплата за грудень", "expected_has_name": false},
     {"comment": "Заробітна плата за 2 ч 11.2025 р.", "expected_has_name": false},
+    {"comment": "Заробітна плата-за II половину листопада 2025 р.", "expected_has_name": false},
+    {"comment": "Заробітна плата-Зарплата за 1 половину листопада 2025р", "expected_has_name": false},
+    {"comment": "Переказ коштiв-Матеріальна допомога грошова проф виплата", "expected_has_name": false},
     {"comment": "Аванс за листопад", "expected_has_name": false},
     {"comment": "Премія за 4 квартал", "expected_has_name": false},
     {"comment": "Поповнення рахунку", "expected_has_name": false},
@@ -14,51 +17,39 @@
     {"comment": "500.50", "expected_has_name": false},
     {"comment": "Рахунок №12345", "expected_has_name": false},
     {"comment": "Договір №001/2025", "expected_has_name": false},
-    {"comment": "За січень 2025", "expected_has_name": false}
+    {"comment": "За січень 2025", "expected_has_name": false},
+    {"comment": "Заробітна плата-Слава Україні", "expected_has_name": false},
+    {"comment": "Переказ-зі святим Миколаєм", "expected_has_name": false},
+    {"comment": "Премія-з Новим Роком", "expected_has_name": false}
   ],
   "with_name_comments": [
-    {
-      "comment": "Переказ Іванову Петру Олександровичу",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя + Отчество",
-      "expected_name": "Іванов Петро Олександрович"
-    },
-    {
-      "comment": "Для Шевченко Тараса Григоровича",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя + Отчество"
-    },
-    {
-      "comment": "Переказ Коваленко Марії",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя"
-    },
-    {
-      "comment": "На картку Бондаренко Андрію",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя"
-    },
-    {
-      "comment": "Від Петренко",
-      "expected_has_name": true,
-      "expected_category": "Только фамилия"
-    },
-    {
-      "comment": "Подопригора Андрій Петрович - зарплата",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя + Отчество"
-    },
-    {
-      "comment": "Зарплата Мельник О.В.",
-      "expected_has_name": true,
-      "expected_category": "Фамилия + Имя"
-    }
+    {"comment": "Переказ Іванову Петру Олександровичу", "expected_has_name": true},
+    {"comment": "Заробітна плата-Іванов Петро Олександрович", "expected_has_name": true},
+    {"comment": "Для Шевченко Тараса Григоровича", "expected_has_name": true},
+    {"comment": "Переказ Коваленко Марії", "expected_has_name": true},
+    {"comment": "На картку Бондаренко Андрію", "expected_has_name": true},
+    {"comment": "Від Петренко", "expected_has_name": true},
+    {"comment": "Подопригора Андрій Петрович - зарплата", "expected_has_name": true},
+    {"comment": "Заробітна плата-Булатов Руслан Олександрович", "expected_has_name": true}
   ],
   "edge_cases": [
     {"comment": "", "expected_has_name": false},
     {"comment": "   ", "expected_has_name": false},
     {"comment": "12", "expected_has_name": false},
     {"comment": "ЗП", "expected_has_name": false},
-    {"comment": "Переказ від Іванова І.І. за договором №123", "expected_has_name": true}
+    {"comment": "Переказ від Іванова І.І. за договором №123", "expected_has_name": true},
+    {"comment": "Заробітна плата-", "expected_has_name": false}
+  ],
+  "sanctions_in_list": [
+    {"comment": "Заробітна плата-Булатов Руслан Рустемович", "expected_sanctions_found": true},
+    {"comment": "Переказ-Журавльов Олексій Олександрович", "expected_sanctions_found": true}
+  ],
+  "sanctions_not_in_list": [
+    {"comment": "Заробітна плата-Тестовий Тест Тестович", "expected_sanctions_found": false},
+    {"comment": "Премія-Демотест Демо Демович", "expected_sanctions_found": false},
+    {"comment": "Аванс-Мельник Ігор Петрович", "expected_sanctions_found": false, "reason": "прізвище різне (Мельник vs Вітченко), ім'я+по батькові співпадають"},
+    {"comment": "Виплата-Левченко Анна Володимирівна", "expected_sanctions_found": false, "reason": "прізвище різне (Левченко vs Зинов'єва)"},
+    {"comment": "Заробітна плата-Іванов Петро Олександрович", "expected_sanctions_found": false, "reason": "ім'я різне (Петро vs Олег), в списку Іванов Олег Олександрович"},
+    {"comment": "Заробітна плата-Іванов Петро Сергійович", "expected_sanctions_found": false, "reason": "ім'я різне (Петро vs Олександр), в списку Іванов Олександр Сергійович"}
   ]
 }

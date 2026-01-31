@@ -85,9 +85,36 @@ class TestPipelineWithTestData:
             assert result.has_name == item["expected_has_name"], \
                 f"Failed for: {item['comment']}"
 
+    def test_with_name_comments(self, pipeline, test_data):
+        """Test comments that contain names"""
+        for item in test_data["with_name_comments"]:
+            result = pipeline.process_sync(item["comment"])
+            assert result.has_name == item["expected_has_name"], \
+                f"Failed for: {item['comment']}"
+
     def test_edge_cases(self, pipeline, test_data):
         """Test edge cases"""
         for item in test_data["edge_cases"]:
             result = pipeline.process_sync(item["comment"])
             assert result.has_name == item["expected_has_name"], \
                 f"Failed for: '{item['comment']}'"
+
+    def test_sanctions_in_list(self, pipeline, test_data):
+        """Test that persons IN sanctions list are flagged"""
+        if "sanctions_in_list" not in test_data:
+            pytest.skip("No sanctions test data")
+        for item in test_data["sanctions_in_list"]:
+            result = pipeline.process_sync(item["comment"])
+            if result.has_name and result.sanctions_check:
+                assert result.sanctions_check.found == item["expected_sanctions_found"], \
+                    f"Sanctions check failed for: {item['comment']}"
+
+    def test_sanctions_not_in_list(self, pipeline, test_data):
+        """Test that persons NOT in sanctions list are not flagged"""
+        if "sanctions_not_in_list" not in test_data:
+            pytest.skip("No sanctions test data")
+        for item in test_data["sanctions_not_in_list"]:
+            result = pipeline.process_sync(item["comment"])
+            if result.has_name and result.sanctions_check:
+                assert result.sanctions_check.found == item["expected_sanctions_found"], \
+                    f"Sanctions check failed for: {item['comment']}"

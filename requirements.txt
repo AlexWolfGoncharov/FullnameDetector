@@ -7,6 +7,10 @@ pydantic-settings==2.1.0
 
 # NLP
 spacy==3.7.2
+transformers>=4.36.0
+torch>=2.0.0
+sentencepiece>=0.1.99
+huggingface_hub>=0.20.0
 
 # HTTP clients
 aiohttp==3.9.1
@@ -17,7 +21,8 @@ python-multipart==0.0.6
 cachetools==5.3.2
 
 # MamayLM (llama-cpp-python for CPU inference)
-llama-cpp-python==0.2.56
+# Версия 0.2.70+ поддерживает Gemma 3 архитектуру
+llama-cpp-python>=0.2.70
 
 # Testing
 pytest==7.4.4

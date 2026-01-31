@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.models.schemas import (
@@ -15,6 +16,7 @@ from app.models.schemas import (
     SetupStatus
 )
 from app.services.pipeline import get_pipeline, NameDetectionPipeline
+from app.services.request_logger import get_request_logger
 from app.setup import SetupManager
 
 # Configure logging
@@ -85,11 +87,11 @@ async def detect_name(request: CommentRequest):
     - "Переказ Іванову Петру Олександровичу" → has_name: true
 
     **Категорії:**
-    - Фамилия + Имя + Отчество
-    - Фамилия + Имя
-    - Только фамилия
-    - Имя без фамилии
-    - Не содержит ФИО
+    - Прізвище + Ім'я + По батькові
+    - Прізвище + Ім'я
+    - Тільки прізвище
+    - Тільки ім'я
+    - ПІБ не знайдено
     """
     try:
         pipeline = get_pipeline()
@@ -109,6 +111,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         spacy_model=health["ner_engine"],
+        roberta_ner=health["roberta_ner"],
         llm_available=health["llm_fallback"] == "available",
         cache_enabled=health["cache"] == "enabled"
     )
@@ -139,15 +142,45 @@ async def run_setup():
 
     if success:
         # Reinitialize pipeline with new models
-        global _pipeline
-        from app.services.pipeline import _pipeline
-        _pipeline = None
+        import app.services.pipeline as pipeline_module
+        pipeline_module._pipeline = None
         get_pipeline()
 
     return {
         "success": success,
         "status": status
     }
+
+
+@app.get("/logs/stats")
+async def get_log_stats():
+    """Отримати статистику логування запитів"""
+    request_logger = get_request_logger()
+    return request_logger.get_stats()
+
+
+@app.get("/logs/download")
+async def download_logs():
+    """Скачати CSV файл з логами запитів"""
+    request_logger = get_request_logger()
+    log_path = request_logger.get_log_path()
+
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    return FileResponse(
+        path=log_path,
+        filename="requests.csv",
+        media_type="text/csv"
+    )
+
+
+@app.delete("/logs/clear")
+async def clear_logs():
+    """Очистити логи запитів"""
+    request_logger = get_request_logger()
+    request_logger.clear()
+    return {"message": "Logs cleared"}
 
 
 def main():

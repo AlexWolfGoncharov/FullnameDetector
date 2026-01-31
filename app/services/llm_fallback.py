@@ -3,6 +3,7 @@
 import re
 import asyncio
 import logging
+import threading
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -15,17 +16,23 @@ logger = logging.getLogger(__name__)
 
 
 # Prompt template для Gemma 3 (формат chat template)
-PROMPT_TEMPLATE = """<bos><start_of_turn>user
-Проаналізуй український платіжний коментар і визнач, чи містить він ПІБ (прізвище, ім'я, по батькові) людини.
+# Примітка: <bos> не додаємо вручну - llama-cpp-python додає його автоматично
+PROMPT_TEMPLATE = """<start_of_turn>user
+Проаналізуй платіжний коментар. Визнач чи ЯВНО написане ПІБ людини.
 
-ІГНОРУЙ ці слова як НЕ імена: зарплата, премія, аванс, виплата, переказ, податки, поповнення, рахунок, оплата, послуги, товари.
+КРИТИЧНО ВАЖЛИВО:
+- Відповідай ТІЛЬКИ якщо ім'я/прізвище БУКВАЛЬНО написане в тексті
+- НЕ вигадуй імена яких немає в тексті
+- Якщо сумніваєшся - відповідай НЕМАЄ_ПІБ
 
-Відповідь ТІЛЬКИ в одному з форматів:
-1. "ПОВНЕ_ПІБ | Прізвище Ім'я По-батькові" - якщо є всі три частини
-2. "ПРІЗВИЩЕ_ІМЯ | Прізвище Ім'я" - якщо є прізвище та ім'я
-3. "ТІЛЬКИ_ПРІЗВИЩЕ | Прізвище" - якщо є тільки прізвище
-4. "ТІЛЬКИ_ІМЯ | Ім'я" - якщо є тільки ім'я
-5. "НЕМАЄ_ПІБ" - якщо ПІБ відсутнє
+НЕ є іменами: зарплата, заробітна, премія, аванс, виплата, переказ, оплата, рахунок, поповнення, товари, послуги, плата, жовтня, січня, лютого, березня, квітня, травня, червня, липня, серпня, вересня, листопада, грудня, року, грн, UAH.
+
+Формат відповіді:
+- "ПОВНЕ_ПІБ | Прізвище Ім'я По-батькові" - всі 3 частини є в тексті
+- "ПРІЗВИЩЕ_ІМЯ | Прізвище Ім'я" - 2 частини є в тексті
+- "ТІЛЬКИ_ПРІЗВИЩЕ | Прізвище" - тільки прізвище в тексті
+- "ТІЛЬКИ_ІМЯ | Ім'я" - тільки ім'я в тексті
+- "НЕМАЄ_ПІБ" - ПІБ не знайдено
 
 Коментар: {comment}<end_of_turn>
 <start_of_turn>model
@@ -50,6 +57,8 @@ class LLMFallback:
         self._loaded = False
         self._executor = ThreadPoolExecutor(max_workers=self.settings.llm_max_concurrent)
         self._semaphore = asyncio.Semaphore(self.settings.llm_max_concurrent)
+        # llama.cpp не thread-safe — серіалізуємо виклики
+        self._llm_lock = threading.Lock()
 
     def load(self) -> bool:
         """Initialize LLM backend"""
@@ -166,7 +175,7 @@ class LLMFallback:
                 result = response.json()
                 output = result.get("response", "").strip()
                 logger.debug(f"Ollama output: {output}")
-                return self._parse_llm_response(output)
+                return self._parse_llm_response(output, comment)
             else:
                 logger.error(f"Ollama error: {response.status_code}")
 
@@ -178,25 +187,25 @@ class LLMFallback:
         return None
 
     def _process_llama_cpp_sync(self, comment: str) -> Optional[NameDetectionResponse]:
-        """Process with llama.cpp"""
+        """Process with llama.cpp (thread-safe: llama.cpp не підтримує паралельні виклики)"""
         if self._llm is None:
             return None
 
-        # Форматуємо промпт для Gemma 3
         prompt = PROMPT_TEMPLATE.format(comment=comment)
 
         try:
-            response = self._llm(
-                prompt,
-                max_tokens=self.settings.llm_max_tokens,
-                temperature=self.settings.llm_temperature,
-                stop=["\n", "Коментар:"],
-                echo=False
-            )
+            with self._llm_lock:
+                response = self._llm(
+                    prompt,
+                    max_tokens=self.settings.llm_max_tokens,
+                    temperature=self.settings.llm_temperature,
+                    stop=["\n", "Коментар:"],
+                    echo=False
+                )
 
             output = response["choices"][0]["text"].strip()
             logger.debug(f"LLM output: {output}")
-            return self._parse_llm_response(output)
+            return self._parse_llm_response(output, comment)
 
         except Exception as e:
             logger.error(f"LLM inference error: {e}")
@@ -223,7 +232,7 @@ class LLMFallback:
                 logger.error(f"LLM async error: {e}")
                 return None
 
-    def _parse_llm_response(self, output: str) -> NameDetectionResponse:
+    def _parse_llm_response(self, output: str, original_comment: str = "") -> NameDetectionResponse:
         """Parse LLM response into structured response"""
         output = output.strip()
 
@@ -241,17 +250,35 @@ class LLMFallback:
 
         if "|" in output:
             parts = output.split("|", 1)
-            category_str = parts[0].strip()
+            category_str = parts[0].strip().upper()
             name = parts[1].strip() if len(parts) > 1 else None
 
-            if "ПОВНЕ_ПІБ" in category_str:
+            if "ПОВНЕ_ПІБ" in category_str or "ПОВНЕ" in category_str:
                 category = NameCategory.FULL_NAME
-            elif "ПРІЗВИЩЕ_ІМЯ" in category_str:
+            elif "ПРІЗВИЩЕ_ІМЯ" in category_str or ("ПРІЗВИЩЕ" in category_str and "ІМЯ" in category_str):
                 category = NameCategory.SURNAME_NAME
             elif "ТІЛЬКИ_ПРІЗВИЩЕ" in category_str:
                 category = NameCategory.SURNAME_ONLY
             elif "ТІЛЬКИ_ІМЯ" in category_str:
                 category = NameCategory.NAME_ONLY
+            elif name:
+                # Категорія не розпізнана, але є ім'я - визначаємо за кількістю слів
+                words = name.split()
+                if len(words) >= 3:
+                    category = NameCategory.FULL_NAME
+                elif len(words) == 2:
+                    category = NameCategory.SURNAME_NAME
+                else:
+                    word = words[0].lower()
+                    surname_endings = (
+                        'енко', 'ченко', 'ук', 'чук', 'юк', 'ак', 'як',
+                        'ський', 'цький', 'зький', 'ний', 'ий', 'ов', 'ев', 'єв',
+                        'ін', 'їн', 'ко', 'ло', 'но', 'шин', 'ишин'
+                    )
+                    if word.endswith(surname_endings):
+                        category = NameCategory.SURNAME_ONLY
+                    else:
+                        category = NameCategory.NAME_ONLY
         else:
             name_match = re.search(
                 r'([А-ЯІЇЄҐ][а-яіїєґ\']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ\']+)*)',
@@ -265,9 +292,82 @@ class LLMFallback:
                 elif len(words) == 2:
                     category = NameCategory.SURNAME_NAME
                 else:
-                    category = NameCategory.NAME_ONLY
+                    # Одне слово - визначаємо прізвище це чи ім'я за закінченням
+                    word = words[0].lower()
+                    # Типові закінчення українських прізвищ
+                    surname_endings = (
+                        'енко', 'ченко', 'ук', 'чук', 'юк', 'ак', 'як',
+                        'ський', 'цький', 'зький', 'ний', 'ий', 'ов', 'ев', 'єв',
+                        'ін', 'їн', 'ко', 'ло', 'но', 'шин', 'ишин'
+                    )
+                    if word.endswith(surname_endings):
+                        category = NameCategory.SURNAME_ONLY
+                    else:
+                        category = NameCategory.NAME_ONLY
 
         has_name = category != NameCategory.NO_NAME
+
+        # Стоп-слова які часто помилково розпізнаються як імена
+        STOP_WORDS = {
+            'заробітна', 'зарплата', 'премія', 'аванс', 'виплата', 'переказ',
+            'оплата', 'рахунок', 'поповнення', 'товари', 'послуги', 'плата',
+            'прізвище', 'ім\'я', 'імя', 'батькові',
+            'картки', 'карток', 'картка', 'рахунки', 'рахунків',
+            'допомога', 'допомоги', 'соціальна', 'матеріальна',
+            'квартальна', 'річна', 'місячна'
+        }
+
+        # Перевірка на стоп-слова
+        if has_name and name:
+            name_lower = name.lower()
+            for stop_word in STOP_WORDS:
+                if stop_word in name_lower:
+                    logger.warning(f"Stop word detected in name: '{name}'")
+                    return NameDetectionResponse(
+                        has_name=False,
+                        category=NameCategory.NO_NAME,
+                        detected_name=None,
+                        confidence=0.7,
+                        tier_used=3
+                    )
+
+        # Валідація: перевіряємо що знайдене ім'я дійсно є в оригінальному тексті
+        if has_name and name and original_comment:
+            # Перевіряємо кожну частину імені
+            name_parts = name.split()
+            found_parts = [part for part in name_parts if part.lower() in original_comment.lower()]
+
+            # Якщо жодна частина не знайдена - це повна галюцінація
+            if len(found_parts) == 0:
+                logger.warning(f"LLM hallucination detected: '{name}' not found in '{original_comment}'")
+                return NameDetectionResponse(
+                    has_name=False,
+                    category=NameCategory.NO_NAME,
+                    detected_name=None,
+                    confidence=0.7,
+                    tier_used=3
+                )
+
+            # Якщо знайдено тільки частину - використовуємо тільки знайдені частини
+            if len(found_parts) < len(name_parts):
+                logger.info(f"Partial match: using '{' '.join(found_parts)}' instead of '{name}'")
+                name = ' '.join(found_parts)
+                # Перевизначаємо категорію
+                if len(found_parts) >= 3:
+                    category = NameCategory.FULL_NAME
+                elif len(found_parts) == 2:
+                    category = NameCategory.SURNAME_NAME
+                else:
+                    word = found_parts[0].lower()
+                    surname_endings = (
+                        'енко', 'ченко', 'ук', 'чук', 'юк', 'ак', 'як',
+                        'ський', 'цький', 'зький', 'ний', 'ий', 'ов', 'ев', 'єв',
+                        'ін', 'їн', 'ко', 'ло', 'но', 'шин', 'ишин'
+                    )
+                    if word.endswith(surname_endings):
+                        category = NameCategory.SURNAME_ONLY
+                    else:
+                        category = NameCategory.NAME_ONLY
 
         return NameDetectionResponse(
             has_name=has_name,

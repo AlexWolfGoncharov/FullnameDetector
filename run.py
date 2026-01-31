@@ -94,7 +94,7 @@ Examples:
     # Run server
     print("\n" + "=" * 60)
     print(f"Starting API server on http://{args.host}:{args.port}")
-    print("Docs available at: http://localhost:8000/docs")
+    print(f"Docs available at: http://localhost:{args.port}/docs")
     print("=" * 60 + "\n")
 
     import uvicorn

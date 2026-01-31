@@ -1,22 +1,12 @@
-# Ukrainian Name Detection API - Архітектура
+# Ukrainian Name Detection API — Архітектура
 
-## Вимоги
-- **Навантаження:** > 100 RPS
-- **Ресурси:** 16GB RAM, без GPU
-- **Точність:** < 1% помилок (критична)
-- **Режим:** Real-time API
+## Опис
 
-## Проблема
-
-При 100+ RPS та 16GB RAM без GPU, використання LLM для кожного запиту **неможливе**:
-- Gemma 9B: ~2-5 сек/запит на CPU = max 0.5 RPS
-- Gemma 2B quantized: ~0.5-1 сек/запит = max 2 RPS
-
-**Рішення:** Багаторівнева архітектура з мінімальним використанням LLM.
+API для визначення ПІБ (прізвище, ім'я, по батькові) у платіжних коментарях українською мовою з перевіркою на санкційний список РНБО.
 
 ---
 
-## Архітектура: Multi-Tier Pipeline
+## Багаторівнева архітектура (Multi-Tier Pipeline)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -24,337 +14,157 @@
 └──────────────────────────┬──────────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  TIER 1: Швидкий фільтр (< 1ms)                                 │
+│  TIER 1: Quick Filter (< 1ms)                                   │
 │  - Regex для очевидних випадків БЕЗ ПІБ                         │
-│  - "зарплата", "аванс", "податки" → НЕ МІСТИТЬ ПІБ              │
-│  - Пусті/короткі коментарі                                      │
-│  Очікувано: 60-70% запитів завершуються тут                     │
+│  - "зарплата", "аванс", "податки", "Слава Україні" → БЕЗ ПІБ   │
+│  - Формат коментаря: "Призначення-Кастомна частина"             │
+│  Очікувано: 30–40% запитів                                      │
 └──────────────────────────┬──────────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  TIER 2: NER модель (5-20ms)                                    │
-│  - spaCy uk_core_news_trf або uk_core_news_md                   │
-│  - Розпізнає PER (персони) в тексті                             │
-│  - Класифікує: ПІБ, Ім'я+Прізвище, тільки Ім'я                  │
-│  Очікувано: 25-35% запитів                                      │
+│  TIER 2a: spaCy NER (2–5ms)                                     │
+│  - uk_core_news_md                                              │
+│  - Розпізнає PER (персони), патерни ПІБ                         │
 └──────────────────────────┬──────────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  TIER 3: LLM Fallback (1-3 сек) - ТІЛЬКИ для складних випадків  │
-│  - Неоднозначні результати NER                                  │
-│  - Низька впевненість                                           │
-│  - Черга з rate limiting                                        │
-│  Очікувано: 3-5% запитів                                        │
+│  TIER 2b: RoBERTa NER (опційно, ~50–100ms)                      │
+│  - EvanD/xlm-roberta-base-ukrainian-ner-ukrner                  │
+│  - Вища точність для складних випадків                          │
+│  - Використовується разом зі spaCy (обираємо кращий результат)  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  TIER 3: LLM Fallback (1–3 сек)                                 │
+│  - MamayLM-Gemma-3-4B-IT (Ollama або llama.cpp)                 │
+│  - Лише для низької впевненості або часткових результатів       │
+│  - Rate limiting, thread-safe                                   │
+│  Очікувано: 3–5% запитів                                        │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Sanctions Checker                                              │
+│  - Перевірка виявлених імен у sanctions_individuals.csv         │
+│  - Правила: потрібне прізвище, при збігу імені — ігноруємо      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Компоненти
+## Формат коментарів
 
-### Tier 1: Quick Filter
-
-**Характеристики:**
-- Час: < 1ms
-- RAM: ~1MB
-- Throughput: 10,000+ RPS
-
-**Реалізація:**
-```python
-# Швидкі паттерни БЕЗ ПІБ
-NO_NAME_PATTERNS = [
-    r'^(зарплата|зп|з/п)(\s|$)',
-    r'^(аванс|премія|виплата)(\s|$)',
-    r'^(поповнення|переказ коштів)$',
-    r'^(податки|єсв|пдв)(\s|$)',
-    r'^\d+[\s\.]*(грн|uah|₴)',
-]
-```
-
-### Tier 2: NER Engine
-
-**Модель:** `uk_core_news_trf` (трансформер) або `uk_core_news_md` (швидша)
-
-**Характеристики uk_core_news_trf:**
-- Час: 10-30ms на CPU
-- RAM: ~2GB
-- Throughput: 30-100 RPS (з threading)
-
-**Характеристики uk_core_news_md:**
-- Час: 2-5ms
-- RAM: ~200MB
-- Throughput: 200-500 RPS
-- Точність: на 5-10% нижча
-
-### Tier 3: LLM Fallback
-
-**Модель:** `INSAIT-Institute/MamayLM` - спеціалізована українська LLM
-
-**Про MamayLM:**
-- Базується на Gemma 2 9B
-- Оптимізована для української мови
-- HuggingFace: `INSAIT-Institute/MamayLM-Gemma2-9B-Instruct`
-- Підтримує GGUF формат для llama.cpp/Ollama
-
-**Варіанти запуску:**
-1. **Через Ollama** (рекомендовано):
-   ```bash
-   # Створити Modelfile для MamayLM
-   ollama create mamaylm -f Modelfile
-   ```
-
-2. **Через llama-cpp-python** (для більшого контролю):
-   ```python
-   from llama_cpp import Llama
-   llm = Llama(model_path="mamaylm-9b-q4_k_m.gguf", n_ctx=2048)
-   ```
-
-3. **Через HuggingFace Transformers** (потребує більше RAM):
-   ```python
-   from transformers import AutoModelForCausalLM, AutoTokenizer
-   model = AutoModelForCausalLM.from_pretrained("INSAIT-Institute/MamayLM-Gemma2-9B-Instruct")
-   ```
-
-**Коли викликається:**
-- NER повернув суперечливі результати
-- Confidence < 0.7
-- Виявлено потенційне ім'я, але не впевнений у класифікації
-
-**Rate Limiting:**
-- Max 5 concurrent LLM requests
-- Timeout: 10 секунд
-- Fallback до NER результату при timeout
-
-**Характеристики MamayLM (Q4 quantized):**
-- RAM: ~6GB
-- Час відповіді: 2-5 сек на CPU
-- Точність на українській: найвища серед open-source
+- **Стандарт-ПІБ:** `Заробітна плата-Булатов Руслан Олександрович` — обробляємо частину після тире.
+- **ПІБ-призначення:** `Подопригора Андрій Петрович - зарплата` — обробляємо частину перед тире.
+- Типові призначення: зарплата, зарплатна, премія, аванс, виплата, переказ, оплата.
 
 ---
 
 ## Структура проекту
 
 ```
-fullname_detector/
+Fullname_detector/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # FastAPI app
-│   ├── config.py            # Налаштування
+│   ├── main.py              # FastAPI застосунок
+│   ├── config.py            # Pydantic Settings
+│   ├── setup.py             # Автозавантаження моделей
 │   ├── models/
-│   │   ├── __init__.py
 │   │   └── schemas.py       # Pydantic моделі
 │   ├── services/
-│   │   ├── __init__.py
-│   │   ├── quick_filter.py  # Tier 1: Regex фільтр
-│   │   ├── ner_engine.py    # Tier 2: spaCy NER
-│   │   ├── llm_fallback.py  # Tier 3: Ollama
-│   │   ├── pipeline.py      # Orchestration
-│   │   └── cache.py         # LRU/Redis cache
+│   │   ├── quick_filter.py  # Tier 1: Regex
+│   │   ├── ner_engine.py    # Tier 2a: spaCy
+│   │   ├── roberta_ner.py   # Tier 2b: RoBERTa NER
+│   │   ├── llm_fallback.py  # Tier 3: Ollama / llama.cpp
+│   │   ├── pipeline.py      # Оркестрація
+│   │   ├── cache.py         # LRU кеш
+│   │   ├── sanctions_checker.py  # Перевірка санкцій
+│   │   └── request_logger.py     # Логування запитів
 │   └── data/
 │       ├── patterns.py      # Regex паттерни
-│       └── name_lists.py    # Списки імен/прізвищ
+│       └── sanctions_individuals.csv
 ├── tests/
-│   ├── test_quick_filter.py
-│   ├── test_ner_engine.py
 │   ├── test_pipeline.py
+│   ├── test_quick_filter.py
+│   ├── test_comprehensive.py
+│   ├── test_real_comments.py
 │   └── test_data/
-│       └── comments.json    # Тестові дані
+│       └── comments.json
+├── scripts/
+│   ├── test_via_api.py      # Тест API
+│   └── llama_cpp_test.py    # Тест LLM
+├── run.py
 ├── requirements.txt
 ├── Dockerfile
-└── docker-compose.yml
+├── docker-compose.yml
+└── .env.example
 ```
 
 ---
 
-## Залежності
+## Моделі
 
-```txt
-# requirements.txt
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-gunicorn==21.2.0
-pydantic==2.5.3
-spacy==3.7.2
-aiohttp==3.9.1
-python-multipart==0.0.6
-cachetools==5.3.2
-httpx==0.26.0
-pytest==7.4.4
-pytest-asyncio==0.23.3
-
-# Для MamayLM (вибрати один варіант)
-# Варіант 1: llama-cpp-python (рекомендовано для CPU)
-llama-cpp-python==0.2.56
-
-# Варіант 2: HuggingFace (потребує більше RAM)
-# transformers==4.37.0
-# accelerate==0.26.0
-# torch==2.1.2
-```
+| Компонент | Модель | RAM | Латентність |
+|-----------|--------|-----|-------------|
+| Tier 2a | uk_core_news_md | ~200 MB | 2–5 ms |
+| Tier 2b | xlm-roberta-base-ukrainian-ner-ukrner | ~500 MB | 50–100 ms |
+| Tier 3 | MamayLM-Gemma-3-4B-IT Q4_K_M | ~2.5 GB | 1–3 s |
 
 ---
 
-## Налаштування MamayLM
+## LLM (Tier 3)
 
-### Варіант 1: Через Ollama (найпростіше)
+**Модель:** MamayLM-Gemma-3-4B-IT (INSAIT-Institute/MamayLM-Gemma-3-4B-IT-v1.0-GGUF)
 
-```bash
-# 1. Завантажити GGUF модель
-wget https://huggingface.co/INSAIT-Institute/MamayLM-Gemma2-9B-Instruct-GGUF/resolve/main/mamaylm-gemma2-9b-instruct-q4_k_m.gguf
+**Бекенди:**
+1. **llama_cpp** — локальний GGUF через llama-cpp-python.
+2. **ollama** — через Ollama (рекомендовано для Apple Silicon). При запуску:
+   - автоматично стартує `ollama serve`, якщо не запущений;
+   - завантажує GGUF та створює модель в Ollama, якщо її ще немає.
 
-# 2. Створити Modelfile
-cat > Modelfile << 'EOF'
-FROM ./mamaylm-gemma2-9b-instruct-q4_k_m.gguf
-
-PARAMETER temperature 0.1
-PARAMETER top_p 0.9
-PARAMETER num_ctx 2048
-
-SYSTEM """Ти - асистент для аналізу українських платіжних коментарів. Твоє завдання - визначати чи містить коментар ПІБ (прізвище, ім'я, по батькові)."""
-EOF
-
-# 3. Створити модель в Ollama
-ollama create mamaylm -f Modelfile
-
-# 4. Перевірити
-ollama run mamaylm "Визнач ПІБ: Переказ Іванову Петру"
-```
-
-### Варіант 2: Через llama-cpp-python (більше контролю)
-
-```python
-from llama_cpp import Llama
-
-llm = Llama(
-    model_path="mamaylm-gemma2-9b-instruct-q4_k_m.gguf",
-    n_ctx=2048,
-    n_threads=4,
-    verbose=False
-)
-
-response = llm(
-    "Визнач ПІБ у коментарі: Переказ Іванову Петру",
-    max_tokens=100,
-    temperature=0.1
-)
-```
-
-### Варіант 3: Через HuggingFace (потребує 16GB+ RAM)
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
-
-model_name = "INSAIT-Institute/MamayLM-Gemma2-9B-Instruct"
-
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.float16,
-    device_map="auto"
-)
-```
+**Env:**
+- `NAME_DETECTOR_LLM_BACKEND=ollama` або `llama_cpp`
+- `NAME_DETECTOR_LLM_ENABLED=false` — вимкнути LLM.
 
 ---
 
-## Оптимізації
+## Sanctions Checker
 
-### 1. Caching
-```python
-from cachetools import LRUCache
-
-cache = LRUCache(maxsize=10000)
-# Очікувана cache hit rate: 20-40%
-```
-
-### 2. Async Processing
-```python
-@app.post("/detect-name")
-async def detect_name_endpoint(request: Request):
-    return await asyncio.to_thread(process_comment, request.comment)
-```
-
-### 3. Worker Pool
-```bash
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app
-# 4 workers × 25 RPS = 100+ RPS
-```
+- Файл: `app/data/sanctions_individuals.csv` (TSV).
+- **Правила:**
+  - `NAME_ONLY` (без прізвища) → ігнорується.
+  - При частковому збігу: прізвище має збігатися; якщо є ім'я і воно відрізняється — не флагуємо.
 
 ---
 
 ## API Endpoints
 
-### POST /detect-name
-
-**Request:**
-```json
-{
-  "comment": "Переказ Іванову Петру Олександровичу"
-}
-```
-
-**Response:**
-```json
-{
-  "has_name": true,
-  "category": "Фамилия + Имя + Отчество",
-  "detected_name": "Іванов Петро Олександрович",
-  "confidence": 0.95,
-  "tier_used": 2
-}
-```
-
-### GET /health
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "ner_model": "loaded",
-  "llm_available": true
-}
-```
-
----
-
-## Очікувані результати
-
-| Метрика | Значення |
-|---------|----------|
-| Throughput | 100-150 RPS |
-| P50 Latency | 5ms |
-| P95 Latency | 50ms |
-| P99 Latency | 200ms |
-| RAM Usage | 3-4GB |
-| Error Rate | < 1% |
+| Метод | Шлях | Опис |
+|-------|------|------|
+| POST | /detect-name | Визначити ПІБ у коментарі |
+| GET | /health | Стан сервісу |
+| GET | /stats | Статистика (tier1/2/3, cache) |
+| GET | /setup-status | Статус моделей |
+| POST | /setup | Повторне завантаження моделей |
+| GET | /logs/download | Завантажити логи запитів |
 
 ---
 
 ## Запуск
 
-### Development
 ```bash
-# Встановлення залежностей
+# Встановлення
+python -m venv venv
+source venv/bin/activate  # або venv\Scripts\activate на Windows
 pip install -r requirements.txt
-python -m spacy download uk_core_news_trf
 
-# Запуск MamayLM через Ollama
-ollama serve
+# Автоналаштування + запуск
+python run.py --port 8000
 
-# Завантажити GGUF модель MamayLM та створити Modelfile
-# Див. секцію "Налаштування MamayLM"
+# Лише налаштування
+python run.py --setup-only
 
-# Запуск API
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Production
-```bash
-# Docker
-docker-compose up -d
-
-# Або напряму
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:8000
+# Запуск без LLM
+NAME_DETECTOR_LLM_ENABLED=false python run.py
 ```
 
 ---
@@ -362,22 +172,9 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:8000
 ## Тестування
 
 ```bash
-# Unit тести
-pytest tests/ -v
+# Unit-тести
+python -m pytest tests/ -v
 
-# Тест API
-curl -X POST http://localhost:8000/detect-name \
-  -H "Content-Type: application/json" \
-  -d '{"comment": "Переказ Іванову Петру Олександровичу"}'
+# Тест API (сервер має бути запущений)
+python scripts/test_via_api.py http://localhost:8000
 ```
-
----
-
-## План імплементації
-
-- [ ] Етап 1: Базова структура проекту
-- [ ] Етап 2: Tier 1 - Quick Filter (regex)
-- [ ] Етап 3: Tier 2 - NER Engine (spaCy)
-- [ ] Етап 4: Tier 3 - LLM Fallback (MamayLM)
-- [ ] Етап 5: Pipeline та caching
-- [ ] Етап 6: Тести та Docker
